@@ -1,4 +1,4 @@
 name = "pdf"
 version = "0.1.0"
-description = "PDF text extraction with Apache Tika, including OCR (DRAFT)."
+description = "PDF attachments in inference requests to text, with Apache Tika and OCR (DRAFT; needs mesh-llm request_transform.v1)."
 command = "pdf"

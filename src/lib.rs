@@ -1,16 +1,19 @@
-//! `pdf`: PDF text extraction for Mesh LLM, with Apache Tika (and OCR).
+//! `pdf`: PDF attachments for Mesh LLM, decoded with Apache Tika (and OCR).
 //!
-//! One tool, `extract`, published by mesh-llm over MCP (the console's `/mcp`,
-//! as `pdf.extract`) and HTTP (`/api/plugins/pdf/tools/extract`). Small
-//! documents come back as text; large ones as a path to the extracted text
-//! for the calling agent to read with its own tools.
+//! - `transform`: a request transform (`request_transform.v1`) that replaces
+//!   PDF attachments in inference requests with their text, on the node the
+//!   client called, before routing. Clients keep their usual base URL.
+//! - `extract`: the same extraction as a tool, over MCP (`pdf.extract` on the
+//!   console's `/mcp`) and HTTP (`/api/plugins/pdf/tools/extract`).
 
+mod attachments;
 mod error;
 mod extract;
 mod settings;
 mod store;
 mod text;
 mod tika;
+mod transform;
 
 #[cfg(test)]
 mod test_support;
@@ -121,6 +124,18 @@ pub fn plugin() -> SimplePlugin {
     ))
     .with_manifest(manifest(&name))
     .with_operation_router(operations(&shared))
+    .with_request_transform({
+        let shared = Arc::clone(&shared);
+        move |input, _context| {
+            let shared = Arc::clone(&shared);
+            Box::pin(async move {
+                let pdf = current(&shared)?;
+                transform::transform(&pdf, input)
+                    .await
+                    .map_err(transform::plugin_error)
+            })
+        }
+    })
     .on_initialize(move |request, _context| {
         let shared = Arc::clone(&shared);
         Box::pin(async move {
@@ -140,6 +155,7 @@ fn manifest(name: &str) -> mesh_llm_plugin::proto::PluginManifest {
     mesh_llm_plugin::plugin_manifest![
         operation::<extract::ExtractArgs>("extract", EXTRACT_DESCRIPTION),
         operation::<NoArgs>("status", "Extraction and cache counters."),
+        mesh_llm_plugin::request_transform::request_transform(),
         config_schema(name)
             .setting(
                 setting(

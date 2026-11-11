@@ -96,7 +96,7 @@ fn read_path(path: &str, max_bytes: u64) -> Result<(Vec<u8>, String), DocError> 
     Ok((bytes, text::display_name(name.as_deref())))
 }
 
-fn decode_data(data: &str, max_bytes: u64) -> Result<Vec<u8>, DocError> {
+pub(crate) fn decode_data(data: &str, max_bytes: u64) -> Result<Vec<u8>, DocError> {
     let data = data.trim();
     let data = match data.strip_prefix("data:") {
         Some(rest) => rest.split_once(',').map_or("", |(_, body)| body),
@@ -138,24 +138,12 @@ impl Pdf {
                 ));
             }
         };
-        if !pdf.starts_with(b"%PDF-") {
-            return Err(DocError::new(
-                400,
-                "not_a_pdf",
-                format!("{filename} is not a PDF"),
-            ));
-        }
-        self.maybe_sweep();
-        let (entry, cached) = self.extract_cached(pdf, &filename).await?;
+        let (entry, pages, cached) = self.document(pdf, &filename).await?;
         let wants_text = match output {
             Output::Text => true,
             Output::File => false,
             Output::Auto => entry.meta.chars <= self.settings.inline_max_chars,
         };
-        let pages = self
-            .store
-            .pages(&entry.id)
-            .ok_or_else(|| DocError::internal("stored document disappeared"))?;
         Ok(Extracted {
             filename,
             pages: entry.meta.pages,
@@ -167,6 +155,34 @@ impl Pdf {
             pdf_path: (!wants_text).then(|| entry.pdf_path()),
             preview: (!wants_text).then(|| text::preview(&pages)),
         })
+    }
+
+    /// A PDF's stored extraction and its pages, extracting it first if new.
+    pub(crate) async fn document(
+        &self,
+        pdf: Vec<u8>,
+        filename: &str,
+    ) -> Result<(Entry, Vec<String>, bool), DocError> {
+        if pdf.len() as u64 > self.settings.max_pdf_bytes() {
+            return Err(too_big(pdf.len() as u64, self.settings.max_pdf_bytes()));
+        }
+        if !pdf.starts_with(b"%PDF-") {
+            return Err(DocError::new(
+                400,
+                "not_a_pdf",
+                format!("{filename} is not a PDF"),
+            ));
+        }
+        self.maybe_sweep();
+        let (entry, cached) = self.extract_cached(pdf, filename).await?;
+        let pages = self.stored_pages(&entry)?;
+        Ok((entry, pages, cached))
+    }
+
+    pub(crate) fn stored_pages(&self, entry: &Entry) -> Result<Vec<String>, DocError> {
+        self.store
+            .pages(&entry.id)
+            .ok_or_else(|| DocError::internal("stored document disappeared"))
     }
 
     async fn extract_cached(

@@ -9,8 +9,8 @@ description = "PDF text extraction for Mesh LLM with Apache Tika (and OCR)"
 anyhow = "1"
 base64 = "0.22"
 hex = "0.4"
-# Stock mesh-llm main; no host changes needed.
-mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "fe87794b667dc7a449e77eaca024e520c06993b0" }
+# Needs request_transform.v1: draft https://github.com/Mesh-LLM/mesh-llm/pull/3012
+mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "0f30127b05ea1ebe87bd8a5dac69b2d019a7d913" }
 rand = "0.10"
 reqwest = { version = "0.13", default-features = false }
 schemars = "1"
