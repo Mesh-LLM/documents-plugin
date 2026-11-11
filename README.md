@@ -86,8 +86,13 @@ Q4_K_M, Tika 3.3.3 and Tesseract (Homebrew), using plain `curl` against `/v1`:
 ## Gaps
 
 - **Needs the unmerged hook** ([#3012](https://github.com/Mesh-LLM/mesh-llm/pull/3012)).
-- **Large PDFs without tools are rejected.** The plan is a WASM-sandboxed
-  query runtime (RLM). It is not built.
+- **Large PDFs without tools are rejected.** A local RLM trial (Qwen2.5-14B
+  on mesh, Monty REPL) was unreliable on a real 47-page report and doesn't
+  fit this hook: it produces an answer, not a rewrite, and needs its own model
+  calls. Picking the question's most relevant pages (BM25) and inlining them
+  did better in the same trial; that is the likely next step instead.
+- **Tika can outlive mesh-llm.** Once, after SIGTERM to mesh-llm, the Tika
+  JVM was still running 5 s later and had to be killed.
 - **Claude Code often sends PDFs as page images.** When its Read tool is
   given `pages` (at most 20 per call), Claude Code sends JPEG page images
   instead of a document. The 3B model asked for `pages` unprompted, including
