@@ -12,7 +12,7 @@ mod extract;
 mod settings;
 mod store;
 mod text;
-mod tika;
+pub mod tika;
 mod transform;
 
 #[cfg(test)]
@@ -185,20 +185,6 @@ fn manifest(name: &str) -> mesh_llm_plugin::proto::PluginManifest {
             .setting(
                 setting("timeout_secs", config_integer(), "Per-PDF extraction limit.")
                     .default_value(&300)
-            )
-            .setting(setting(
-                "tika_url",
-                config_string(),
-                "A running Tika server on loopback, e.g. http://127.0.0.1:9998."
-            ))
-            .setting(setting(
-                "tika_jar",
-                config_path(),
-                "Or a tika-server jar this plugin starts on loopback."
-            ))
-            .setting(
-                setting("java", config_string(), "Java command used with tika_jar.")
-                    .default_value(&"java")
             )
             .setting(
                 setting("tika_concurrency", config_integer(), "Concurrent extractions.")

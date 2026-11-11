@@ -7,7 +7,9 @@
 This [mesh-llm](https://github.com/Mesh-LLM/mesh-llm) plugin reads PDFs that
 arrive **inside inference requests** and turns them into text the model can
 use. It uses [Apache Tika](https://tika.apache.org/), with OCR (Tesseract) for
-scanned pages. Clients don't change anything: same base URL, same API.
+scanned pages. There's no JVM: Tika comes compiled to a native library with
+GraalVM ([extractous](https://github.com/yobix-ai/extractous)), shipped in the
+plugin archive. Clients don't change anything: same base URL, same API.
 
 ## What it does
 
@@ -38,9 +40,11 @@ disk: arguments `path` or `data_base64`, and `output` = `auto` | `text` | `file`
 
 ## Install
 
-You need Java 11+, the Tika server jar (`tika-server-standard-3.x.jar` from
-https://tika.apache.org/download.html), Tesseract for OCR
-(`brew install tesseract`), and a mesh-llm built from #3012.
+You need Tesseract for OCR (`brew install tesseract`) and a mesh-llm built from
+#3012. No Java. Building downloads GraalVM once (extractous's build script) and
+compiles Tika with native-image, which takes about 2 minutes. The archive
+carries `libtika_native.dylib` (131 MB, 49 MB compressed) next to the `pdf`
+executable.
 
 ```sh
 scripts/package.sh     # prints dist/pdf-0.1.0-<target>.tar.gz
@@ -52,23 +56,23 @@ mesh-llm plugins install --archive dist/pdf-0.1.0-<target>.tar.gz --name pdf
 ```toml
 [[plugin]]
 name = "pdf"
-
-[plugin.settings]
-tika_jar = "/path/to/tika-server-standard-3.3.3.jar"
-java = "/opt/homebrew/opt/openjdk/bin/java"   # default: java on PATH
-# tika_url = "http://127.0.0.1:9998"          # instead of tika_jar
 ```
 
 Other settings, with their defaults: `inline_max_chars = 40000`, `ocr = true`,
 `ocr_language = "eng"`, `tesseract_dir`, `timeout_secs = 300`,
 `max_pdf_mb = 64`, `store_dir`, `ttl_hours = 24`, `max_store_mb = 2048`,
-`tika_concurrency = 2`. The plugin starts Tika on a random loopback port. It
-never fetches URLs.
+`tika_concurrency = 2`. Each extraction runs in a child process (the `pdf`
+executable in worker mode), which is killed at `timeout_secs` and also stops
+itself then. It never fetches URLs.
 
 ## What was tested
 
 Tested on an M-series Mac with mesh-llm #3012 (b3d776c3f), Qwen2.5-3B-Instruct
-Q4_K_M, Tika 3.3.3 and Tesseract (Homebrew), using plain `curl` against `/v1`:
+Q4_K_M and Tesseract (Homebrew), using plain `curl` against `/v1`. Everything
+below was first run against the Tika 3.3.3 server (JVM). The `curl` cases were
+then repeated with native Tika (2.9.2), with the node started with
+`PATH=/usr/bin:/bin` and no Java installed, and gave the same answers and the
+same extracted text:
 
 - A 3-page text PDF (code word on page 3) sent to `/v1/chat/completions`,
   `/v1/responses` and `/v1/messages`. All three answered `PELICAN`.
@@ -91,8 +95,11 @@ Q4_K_M, Tika 3.3.3 and Tesseract (Homebrew), using plain `curl` against `/v1`:
   fit this hook: it produces an answer, not a rewrite, and needs its own model
   calls. Picking the question's most relevant pages (BM25) and inlining them
   did better in the same trial; that is the likely next step instead.
-- **Tika can outlive mesh-llm.** Once, after SIGTERM to mesh-llm, the Tika
-  JVM was still running 5 s later and had to be killed.
+- **Native Tika is 2.9.2,** the version extractous pins. The Tika 2.x line is
+  end of life, and extractous hasn't had a release since Dec 2024. Moving to
+  Tika 3 means building our own native-image of it.
+- **Packaging is macOS only:** `scripts/package.sh` re-points the library to
+  `@loader_path`. Linux would need the same with `$ORIGIN`. Untested.
 - **Claude Code often sends PDFs as page images.** When its Read tool is
   given `pages` (at most 20 per call), Claude Code sends JPEG page images
   instead of a document. The 3B model asked for `pages` unprompted, including
@@ -104,8 +111,8 @@ Q4_K_M, Tika 3.3.3 and Tesseract (Homebrew), using plain `curl` against `/v1`:
 - **`file` paths only help agents on the same machine** as the ingress node.
 - The `extract` tool's `path` argument reads any PDF the mesh-llm user can
   read, for anyone who can reach the console API. Don't expose that API.
-- OCR quality is Tesseract's, and layout and tables are flattened. It needs
-  Java, a ~300 MB jar and Tesseract. PDF only. No CI.
+- OCR quality is Tesseract's, and layout and tables are flattened. PDF
+  only. No CI.
 
 ## Build
 

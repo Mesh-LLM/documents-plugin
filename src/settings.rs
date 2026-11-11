@@ -17,16 +17,11 @@ pub struct Settings {
     pub max_pdf_mb: u64,
     /// Per-extraction limit; OCR of a long scan is slow.
     pub timeout_secs: u64,
-    /// A running Tika server on loopback, e.g. `http://127.0.0.1:9998`.
-    pub tika_url: Option<String>,
-    /// Otherwise the plugin starts `java -jar <tika_jar>` on a loopback port.
-    pub tika_jar: Option<PathBuf>,
-    pub java: String,
     pub tika_concurrency: usize,
-    /// OCR pages without a text layer (needs Tesseract where Tika runs).
+    /// OCR pages without a text layer (needs Tesseract).
     pub ocr: bool,
     pub ocr_language: String,
-    /// Directory holding the `tesseract` binary, added to Tika's PATH.
+    /// Directory holding the `tesseract` binary, put first on the worker's PATH.
     pub tesseract_dir: Option<PathBuf>,
 }
 
@@ -39,9 +34,6 @@ impl Default for Settings {
             max_store_mb: 2048,
             max_pdf_mb: 64,
             timeout_secs: 300,
-            tika_url: None,
-            tika_jar: None,
-            java: "java".into(),
             tika_concurrency: 2,
             ocr: true,
             ocr_language: "eng".into(),

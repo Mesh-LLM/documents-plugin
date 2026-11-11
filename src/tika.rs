@@ -1,72 +1,59 @@
-//! Apache Tika on loopback: either an operator-run server (`tika_url`) or one
-//! this plugin starts from `tika_jar` and stops with itself.
+//! Apache Tika without a JVM: Tika compiled to a native shared library with
+//! GraalVM native-image ([extractous](https://github.com/yobix-ai/extractous),
+//! `libtika_native`).
 //!
-//! Every extraction runs under the caller's deadline. When it passes, the
-//! HTTP request is dropped (closing the connection), Tika is told the same
-//! deadline through `X-Tika-Timeout-Millis`, and the caller gets a 504. The
-//! With `ocr` on, Tika OCRs pages that have no text layer with Tesseract
-//! (`X-Tika-PDFOcrStrategy: auto`).
+//! Each extraction runs in a child process (this same binary with
+//! [`WORKER_FLAG`]): the PDF goes in on stdin, Tika's XHTML comes back on
+//! stdout. So a deadline can kill it, a crash or leak inside Tika can't take
+//! the plugin down, and the child finds `tesseract` through its own PATH.
+//! With `ocr` on, Tika OCRs pages that have no text layer with Tesseract.
 
 use crate::error::DocError;
 use crate::settings::Settings;
+use std::ffi::OsString;
+use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::Stdio;
+use std::process::{ExitCode, Stdio};
 use std::time::Duration;
-use tokio::process::{Child, Command};
-use tokio::sync::{Mutex, Semaphore};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::process::Command;
+use tokio::sync::Semaphore;
 use tokio::time::Instant;
 
-const STARTUP_LIMIT: Duration = Duration::from_secs(60);
+/// Argument that turns this binary into a one-shot extraction worker.
+pub const WORKER_FLAG: &str = "--extract-worker";
+/// Worker exit code for a PDF Tika could not parse (damaged, encrypted, not a PDF).
+const EXIT_INVALID_PDF: u8 = 3;
+/// Worker exit code when its own deadline passed.
+const EXIT_TIMEOUT: u8 = 124;
+/// Tika's output cap, in characters (its default is 100k).
+const MAX_OUTPUT_CHARS: i32 = 256 * 1024 * 1024;
 
 pub struct Tika {
-    source: Source,
-    client: reqwest::Client,
-    server: Mutex<Option<Server>>,
+    program: PathBuf,
+    args: Vec<OsString>,
+    path: Option<OsString>,
     permits: Semaphore,
-    ocr: Option<String>,
-}
-
-enum Source {
-    Url(String),
-    Jar {
-        java: String,
-        jar: PathBuf,
-        tesseract_dir: Option<PathBuf>,
-    },
-    Missing,
-}
-
-struct Server {
-    url: String,
-    child: Option<Child>,
 }
 
 impl Tika {
     pub fn new(settings: &Settings) -> anyhow::Result<Self> {
-        let source = match (&settings.tika_url, &settings.tika_jar) {
-            (Some(url), _) if !url.trim().is_empty() => Source::Url(loopback_url(url)?),
-            (_, Some(jar)) if !jar.as_os_str().is_empty() => Source::Jar {
-                java: settings.java.clone(),
-                jar: jar.clone(),
-                tesseract_dir: settings.tesseract_dir.clone(),
-            },
-            _ => Source::Missing,
-        };
-        let client = reqwest::Client::builder()
-            .no_proxy()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()?;
+        let mut args = vec![OsString::from(WORKER_FLAG)];
+        if settings.ocr {
+            args.push("--ocr".into());
+            args.push(settings.ocr_language.clone().into());
+        }
         Ok(Self {
-            source,
-            client,
-            server: Mutex::new(None),
+            program: std::env::current_exe()?,
+            args,
+            path: worker_path(settings.tesseract_dir.as_deref()),
             permits: Semaphore::new(settings.tika_concurrency),
-            ocr: settings.ocr.then(|| settings.ocr_language.clone()),
         })
     }
 
     /// Extract one PDF into page texts, or fail by `deadline`.
     pub async fn extract(&self, pdf: Vec<u8>, deadline: Instant) -> Result<Vec<String>, DocError> {
+        // Dropping the future at the deadline drops the child, which kills it.
         tokio::time::timeout_at(deadline, self.extract_inner(pdf, deadline))
             .await
             .map_err(|_| DocError::timeout())?
@@ -78,137 +65,153 @@ impl Tika {
         deadline: Instant,
     ) -> Result<Vec<String>, DocError> {
         let _permit = self.permits.acquire().await.map_err(DocError::internal)?;
-        let url = self.server_url().await?;
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let mut request = self
-            .client
-            .put(format!("{url}/tika"))
-            .header("Accept", "text/html")
-            .header("Content-Type", "application/pdf")
-            .header("X-Tika-Timeout-Millis", remaining.as_millis().to_string());
-        request = match &self.ocr {
-            Some(language) => request
-                .header("X-Tika-PDFOcrStrategy", "auto")
-                .header("X-Tika-OCRLanguage", language),
-            None => request
-                .header("X-Tika-PDFOcrStrategy", "no_ocr")
-                .header("X-Tika-OCRskipOcr", "true"),
+        let mut command = Command::new(&self.program);
+        command
+            .args(&self.args)
+            // The worker also stops itself, in case this process dies first.
+            .args(["--deadline-secs", &remaining.as_secs().max(1).to_string()])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+        if let Some(path) = &self.path {
+            command.env("PATH", path);
+        }
+        let mut child = command
+            .spawn()
+            .map_err(|error| unavailable(format!("could not start the Tika worker: {error}")))?;
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| unavailable("no worker stdin"))?;
+        let mut stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| unavailable("no worker stdout"))?;
+        let mut stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| unavailable("no worker stderr"))?;
+        let feed = async move {
+            // A worker that exits early closes the pipe; its exit status says why.
+            let _ = stdin.write_all(&pdf).await;
         };
-        let response = request
-            .body(pdf)
-            .send()
+        let mut out = Vec::new();
+        let mut err = Vec::new();
+        let (_, read_out, read_err) = tokio::join!(
+            feed,
+            stdout.read_to_end(&mut out),
+            stderr.read_to_end(&mut err)
+        );
+        read_out.map_err(|error| unavailable(format!("Tika worker output failed: {error}")))?;
+        let _ = read_err;
+        let status = child
+            .wait()
             .await
-            .map_err(|error| unavailable(format!("Tika request failed: {error}")))?;
-        let status = response.status();
-        let body = response
-            .text()
-            .await
-            .map_err(|error| unavailable(format!("Tika response failed: {error}")))?;
-        match status.as_u16() {
-            200 => Ok(crate::text::pages_from_xhtml(&body)),
-            204 => Ok(Vec::new()),
-            415 | 422 => Err(DocError::new(
+            .map_err(|error| unavailable(format!("Tika worker failed: {error}")))?;
+        match status.code() {
+            Some(0) => Ok(crate::text::pages_from_xhtml(&String::from_utf8_lossy(
+                &out,
+            ))),
+            Some(code) if code == i32::from(EXIT_INVALID_PDF) => Err(DocError::new(
                 422,
                 "invalid_pdf",
                 "the PDF could not be read (damaged, encrypted or unsupported)",
             )),
-            other => Err(unavailable(format!("Tika answered HTTP {other}"))),
+            Some(code) if code == i32::from(EXIT_TIMEOUT) => Err(DocError::timeout()),
+            _ => {
+                let err = String::from_utf8_lossy(&err);
+                let tail: String = err.trim().chars().rev().take(300).collect();
+                let tail: String = tail.chars().rev().collect();
+                Err(unavailable(format!(
+                    "Tika worker failed ({status}): {tail}"
+                )))
+            }
         }
     }
 
-    async fn server_url(&self) -> Result<String, DocError> {
-        let mut server = self.server.lock().await;
-        if let Some(running) = server.as_mut() {
-            let exited = running
-                .child
-                .as_mut()
-                .is_some_and(|child| child.try_wait().ok().flatten().is_some());
-            if !exited {
-                return Ok(running.url.clone());
-            }
-            *server = None;
+    #[cfg(test)]
+    fn with_program(program: &str, args: &[&str]) -> Self {
+        Self {
+            program: program.into(),
+            args: args.iter().map(OsString::from).collect(),
+            path: None,
+            permits: Semaphore::new(1),
         }
-        let started = match &self.source {
-            Source::Url(url) => Server {
-                url: url.clone(),
-                child: None,
-            },
-            Source::Jar {
-                java,
-                jar,
-                tesseract_dir,
-            } => self.start(java, jar, tesseract_dir.as_deref()).await?,
-            Source::Missing => {
-                return Err(unavailable(
-                    "no PDF extractor configured: set tika_url or tika_jar",
-                ));
-            }
-        };
-        let url = started.url.clone();
-        *server = Some(started);
-        Ok(url)
     }
+}
 
-    async fn start(
-        &self,
-        java: &str,
-        jar: &PathBuf,
-        tesseract_dir: Option<&std::path::Path>,
-    ) -> Result<Server, DocError> {
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .and_then(|listener| listener.local_addr())
-            .map_err(DocError::internal)?
-            .port();
-        let mut command = Command::new(java);
-        // Tika's watchdog forks its worker with `java` from PATH, and finds
-        // `tesseract` on PATH: put the configured Java and Tesseract first, and
-        // the usual Homebrew/local bins last (a GUI-launched node has a bare PATH).
-        let java_bin = std::path::Path::new(java)
-            .parent()
-            .filter(|dir| dir.is_absolute());
-        let mut dirs: Vec<PathBuf> = java_bin.into_iter().map(PathBuf::from).collect();
-        dirs.extend(tesseract_dir.map(PathBuf::from));
-        dirs.extend(std::env::split_paths(
-            &std::env::var_os("PATH").unwrap_or_default(),
-        ));
-        for extra in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
-            let extra = PathBuf::from(extra);
-            if extra.is_dir() && !dirs.contains(&extra) {
-                dirs.push(extra);
+/// PATH for the worker: `tesseract_dir` first, then the plugin's PATH, then
+/// the usual Homebrew/local bins (a GUI-launched node has a bare PATH).
+fn worker_path(tesseract_dir: Option<&std::path::Path>) -> Option<OsString> {
+    let mut dirs: Vec<PathBuf> = tesseract_dir.map(PathBuf::from).into_iter().collect();
+    dirs.extend(std::env::split_paths(
+        &std::env::var_os("PATH").unwrap_or_default(),
+    ));
+    for extra in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
+        let extra = PathBuf::from(extra);
+        if extra.is_dir() && !dirs.contains(&extra) {
+            dirs.push(extra);
+        }
+    }
+    std::env::join_paths(dirs).ok()
+}
+
+/// The worker process: `--extract-worker [--ocr <lang>] [--deadline-secs <n>]`,
+/// PDF on stdin, XHTML on stdout.
+pub fn run_worker(args: &[String]) -> ExitCode {
+    use extractous::{Extractor, PdfOcrStrategy, PdfParserConfig, TesseractOcrConfig};
+
+    let value = |flag: &str| {
+        args.iter()
+            .position(|arg| arg == flag)
+            .and_then(|at| args.get(at + 1))
+    };
+    if let Some(secs) = value("--deadline-secs").and_then(|secs| secs.parse::<u64>().ok()) {
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_secs(secs));
+            std::process::exit(i32::from(EXIT_TIMEOUT));
+        });
+    }
+    let mut pdf = Vec::new();
+    if let Err(error) = std::io::stdin().read_to_end(&mut pdf) {
+        eprintln!("reading the PDF from stdin: {error}");
+        return ExitCode::FAILURE;
+    }
+    let ocr = value("--ocr");
+    let strategy = if ocr.is_some() {
+        PdfOcrStrategy::AUTO
+    } else {
+        PdfOcrStrategy::NO_OCR
+    };
+    let mut extractor = Extractor::new()
+        .set_xml_output(true)
+        .set_extract_string_max_length(MAX_OUTPUT_CHARS)
+        .set_pdf_config(PdfParserConfig::new().set_ocr_strategy(strategy));
+    if let Some(language) = ocr {
+        extractor = extractor.set_ocr_config(TesseractOcrConfig::new().set_language(language));
+    }
+    match extractor.extract_bytes_to_string(&pdf) {
+        Ok((xhtml, _metadata)) => {
+            let mut stdout = std::io::stdout().lock();
+            if stdout
+                .write_all(xhtml.as_bytes())
+                .and_then(|()| stdout.flush())
+                .is_err()
+            {
+                return ExitCode::FAILURE;
             }
+            ExitCode::SUCCESS
         }
-        if let Ok(joined) = std::env::join_paths(dirs) {
-            command.env("PATH", joined);
+        Err(extractous::Error::ParseError(message)) => {
+            eprintln!("{message}");
+            ExitCode::from(EXIT_INVALID_PDF)
         }
-        if let Some(home) = java_bin.and_then(|bin| bin.parent()) {
-            command.env("JAVA_HOME", home);
+        Err(error) => {
+            eprintln!("{error}");
+            ExitCode::FAILURE
         }
-        let mut child = command
-            .arg("-jar")
-            .arg(jar)
-            .args(["--host", "127.0.0.1", "--port", &port.to_string()])
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .kill_on_drop(true)
-            .spawn()
-            .map_err(|error| unavailable(format!("could not start Tika: {error}")))?;
-        let url = format!("http://127.0.0.1:{port}");
-        let ready_by = Instant::now() + STARTUP_LIMIT;
-        while Instant::now() < ready_by {
-            if let Ok(Some(status)) = child.try_wait() {
-                return Err(unavailable(format!("Tika exited during startup: {status}")));
-            }
-            let probe = self.client.get(format!("{url}/version")).send().await;
-            if probe.is_ok_and(|response| response.status().is_success()) {
-                return Ok(Server {
-                    url,
-                    child: Some(child),
-                });
-            }
-            tokio::time::sleep(Duration::from_millis(250)).await;
-        }
-        Err(unavailable("Tika did not become ready"))
     }
 }
 
@@ -216,58 +219,14 @@ fn unavailable(message: impl Into<String>) -> DocError {
     DocError::new(503, "document_extractor_unavailable", message)
 }
 
-/// Tika must only ever be reached on this machine.
-fn loopback_url(url: &str) -> anyhow::Result<String> {
-    let parsed = reqwest::Url::parse(url.trim())?;
-    let loopback = match parsed.host() {
-        Some(url::Host::Domain(domain)) => domain == "localhost",
-        Some(url::Host::Ipv4(ip)) => ip.is_loopback(),
-        Some(url::Host::Ipv6(ip)) => ip.is_loopback(),
-        None => false,
-    };
-    if parsed.scheme() != "http" || !loopback {
-        anyhow::bail!("tika_url must be an http:// loopback address");
-    }
-    Ok(parsed.as_str().trim_end_matches('/').to_string())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    #[test]
-    fn tika_url_must_be_loopback() {
-        assert_eq!(
-            loopback_url("http://127.0.0.1:9998/").unwrap(),
-            "http://127.0.0.1:9998"
-        );
-        assert!(loopback_url("http://localhost:9998").is_ok());
-        assert!(loopback_url("http://[::1]:9998").is_ok());
-        assert!(loopback_url("http://10.0.0.2:9998").is_err());
-        assert!(loopback_url("https://127.0.0.1:9998").is_err());
-        assert!(loopback_url("http://tika.example.com").is_err());
-    }
-
-    /// A Tika that accepts the request and never answers: the plugin's own
-    /// deadline must end the call and close the connection.
+    /// A worker that never answers: the deadline must end the call, and kill it.
     #[tokio::test]
-    async fn a_hung_tika_is_abandoned_at_the_deadline() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let (closed_tx, closed_rx) = tokio::sync::oneshot::channel();
-        tokio::spawn(async move {
-            use tokio::io::AsyncReadExt;
-            let (mut socket, _) = listener.accept().await.unwrap();
-            let mut buffer = vec![0u8; 64 * 1024];
-            // Read until the client gives up and closes its side.
-            while socket.read(&mut buffer).await.is_ok_and(|read| read > 0) {}
-            let _ = closed_tx.send(());
-        });
-        let settings = Settings {
-            tika_url: Some(url),
-            ..Settings::default()
-        };
-        let tika = Tika::new(&settings).unwrap();
+    async fn a_hung_worker_is_killed_at_the_deadline() {
+        let tika = Tika::with_program("/bin/sh", &["-c", "sleep 30", "sh"]);
         let started = Instant::now();
         let error = tika
             .extract(
@@ -278,24 +237,11 @@ mod tests {
             .unwrap_err();
         assert_eq!(error.status, 504);
         assert!(started.elapsed() < Duration::from_secs(2));
-        tokio::time::timeout(Duration::from_secs(2), closed_rx)
-            .await
-            .expect("the plugin closed its Tika connection")
-            .unwrap();
     }
 
     #[tokio::test]
-    async fn a_stopped_tika_is_unavailable() {
-        let port = std::net::TcpListener::bind("127.0.0.1:0")
-            .unwrap()
-            .local_addr()
-            .unwrap()
-            .port();
-        let settings = Settings {
-            tika_url: Some(format!("http://127.0.0.1:{port}")),
-            ..Settings::default()
-        };
-        let tika = Tika::new(&settings).unwrap();
+    async fn a_failing_worker_is_unavailable() {
+        let tika = Tika::with_program("/bin/sh", &["-c", "echo boom >&2; exit 1", "sh"]);
         let error = tika
             .extract(
                 b"%PDF-1.7".to_vec(),
@@ -307,5 +253,19 @@ mod tests {
             (error.status, error.code.as_str()),
             (503, "document_extractor_unavailable")
         );
+        assert!(error.message.contains("boom"), "{}", error.message);
+    }
+
+    #[tokio::test]
+    async fn a_missing_worker_is_unavailable() {
+        let tika = Tika::with_program("/nonexistent/pdf-worker", &[]);
+        let error = tika
+            .extract(
+                b"%PDF-1.7".to_vec(),
+                Instant::now() + Duration::from_secs(5),
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(error.status, 503);
     }
 }

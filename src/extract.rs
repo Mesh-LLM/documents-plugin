@@ -204,7 +204,7 @@ impl Pdf {
             .sum();
         if text_chars < MIN_CHARS_PER_PAGE * pages.len().max(1) {
             let why = if self.settings.ocr {
-                "(blank pages, or OCR could not read them; OCR needs tesseract where Tika runs)"
+                "(blank pages, or OCR could not read them; OCR needs tesseract on PATH or in tesseract_dir)"
             } else {
                 "(OCR is off)"
             };
