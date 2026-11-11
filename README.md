@@ -1,51 +1,72 @@
-# pdf-plugin (documents)
+# pdf-plugin
 
-> **⚠️ DRAFT — experimental, not for production use.** It depends on an unmerged
-> host hook ([Mesh-LLM/mesh-llm#3011](https://github.com/Mesh-LLM/mesh-llm/pull/3011),
-> draft) and has only been tested on one dev machine. See [Gaps](#gaps).
+> **⚠️ DRAFT — experimental, not for production use.** Tested on one Mac
+> against mesh-llm `main` (fe87794b6). See [Gaps](#gaps).
 
-A mesh-llm plugin for PDF attachments. The host hands it every PDF part in a
-locally received request (`/v1/chat/completions`, `/v1/responses`, or an
-Anthropic `document` block on `/v1/messages`); the plugin extracts the text
-with Apache Tika and answers one of three ways:
+A [mesh-llm](https://github.com/Mesh-LLM/mesh-llm) plugin that turns PDFs into
+text with [Apache Tika](https://tika.apache.org/), including OCR (Tesseract)
+for scanned pages. It needs no changes to mesh-llm.
 
-| Request | What the model sees |
+It adds one tool, `extract`. mesh-llm publishes it:
+
+- over **MCP**, as `pdf.extract`, on the console's `/mcp` endpoint (e.g.
+  `http://127.0.0.1:3131/mcp`), together with every other plugin tool;
+- over **HTTP**, as `POST /api/plugins/pdf/tools/extract` on the console port.
+
+## Using it
+
+**Agents** (goose, Claude Code, …) have PDFs as files on disk. Add mesh-llm's
+`/mcp` as an MCP server and the agent can call `pdf.extract` on a path:
+
+```sh
+goose run --with-builtin developer \
+  --with-streamable-http-extension "http://127.0.0.1:3131/mcp timeout=300" \
+  -t "Use the pdf extract tool on ~/contract.pdf and list the termination terms"
+```
+
+**Anything else** (a UI, a script) can send the bytes over HTTP:
+
+```sh
+curl -XPOST localhost:3131/api/plugins/pdf/tools/extract \
+  -H 'content-type: application/json' \
+  -d "{\"data_base64\": \"$(base64 -i doc.pdf)\", \"filename\": \"doc.pdf\"}"
+```
+
+Arguments: `path` (absolute, on the mesh-llm machine) **or** `data_base64`
+(a `data:application/pdf;base64,` prefix is fine), optional `filename`, and
+`output`:
+
+| `output` | Result |
 | --- | --- |
-| Total text ≤ `inline_max_chars` (40,000) | The text inline, with `--- Page N ---` markers |
-| Larger, the caller sent `tools`, and it is on this machine | A short note with two local paths: the extracted text and the original PDF, plus a preview |
-| Larger, no `tools` | A reference to the `mesh-docs` reading model, which the request is routed to |
-| Larger, `tools`, from another machine | `413 document_too_large` |
+| `auto` (default) | `text` if the document has ≤ `inline_max_chars` (40,000) characters, else `file` |
+| `text` | `text`: the whole document, each page starting with `--- Page N ---` |
+| `file` | `text_path` (the same text as a file), `pdf_path` (a copy of the original) and a `preview` |
 
-`mesh-docs` answers from the document without putting it all in one prompt.
-With a tool-capable model it searches, reads page ranges and asks a helper
-model about ranges (up to 12 steps, 8,000 characters per tool result, 240 s in
-all); otherwise it sends the best-matching pages in one prompt and says so.
-Every nested prompt stays within 60% of the model's context, counted in
-tokens with the tool schemas, and leaves room for the answer.
+`file` is for large documents: the agent greps or reads `text_path` with its
+own tools instead of putting the whole document into the model's context.
+Every result also has `filename`, `pages`, `chars` and `cached`.
 
-A caller can choose with `x-mesh-documents: inline | pointer | rlm`.
-
-Extracted documents are kept in the store (`~/.mesh-llm/documents`, owner-only)
-for 24 hours after last use, so follow-ups and retries are not extracted
-again. Scanned PDFs without a text layer get `422 pdf_no_text_layer`; there is
-no OCR.
+Extractions are cached by the PDF's SHA-256 in `~/.mesh-llm/pdf` (owner-only)
+and removed 24 hours after last use. Errors: `not_a_pdf`, `invalid_pdf`
+(damaged or encrypted), `pdf_no_text` (blank, or OCR found nothing),
+`document_too_large`, `document_timeout`, `document_extractor_unavailable`.
 
 ## Install
 
-Needs Java 11+ and the Tika server jar
-(`tika-server-standard-3.x.jar` from https://tika.apache.org/download.html),
-or a Tika server already running on loopback.
+Needs Java 11+, the Tika server jar (`tika-server-standard-3.x.jar` from
+https://tika.apache.org/download.html) and, for OCR, Tesseract
+(`brew install tesseract`).
 
 ```sh
-scripts/package.sh            # prints dist/documents-0.1.0-<target>.tar.gz
-mesh-llm plugins install --archive dist/documents-0.1.0-<target>.tar.gz --name documents
+scripts/package.sh     # prints dist/pdf-0.1.0-<target>.tar.gz
+mesh-llm plugins install --archive dist/pdf-0.1.0-<target>.tar.gz --name pdf
 ```
 
 Then in `~/.mesh-llm/config.toml`:
 
 ```toml
 [[plugin]]
-name = "documents"
+name = "pdf"
 
 [plugin.settings]
 tika_jar = "/path/to/tika-server-standard-3.3.3.jar"
@@ -53,43 +74,43 @@ java = "/opt/homebrew/opt/openjdk/bin/java"   # default: java on PATH
 # tika_url = "http://127.0.0.1:9998"          # instead of tika_jar
 ```
 
-Other settings, with their defaults: `inline_max_chars = 40000`,
-`pointer = "auto"` (or `"header"`: only on request, `"off"`: never),
-`store_dir`, `ttl_hours = 24`, `max_store_mb = 2048`, `max_total_pdf_mb = 64`,
-`max_total_chars = 5000000`, `tika_concurrency = 2`, `root_model` and
-`sub_model` (the models `mesh-docs` reads with; by default the caller's model,
-else the best candidate).
+Other settings, with defaults: `inline_max_chars = 40000`, `ocr = true`,
+`ocr_language = "eng"` (e.g. `"eng+deu"`), `tesseract_dir` (if `tesseract`
+is not on PATH; `/opt/homebrew/bin` and `/usr/local/bin` are always tried),
+`timeout_secs = 300`, `max_pdf_mb = 64`, `store_dir`, `ttl_hours = 24`,
+`max_store_mb = 2048`, `tika_concurrency = 2`.
 
-`POST /api/plugins/documents/tools/status` on the console port reports
-extractions, cache hits and what the last `mesh-docs` turn did.
+The plugin starts Tika on a random loopback port and stops it with itself.
+It never fetches URLs.
+
+## What was tested
+
+On an M-series Mac, mesh-llm `main` fe87794b6, Tika 3.3.3, Tesseract via Homebrew:
+
+- text PDF (3 pages) → `text`; 300-page PDF (1.2M chars) → `file`, second call cached;
+- image-only scanned page → OCR text; mixed PDF (30 text pages + 1 scanned) → all 31 pages;
+- blank, corrupt and non-PDF inputs → errors; `data_base64` and `path` input;
+- the same tool over HTTP and over MCP (`pdf.extract`);
+- goose 1.59 with mesh-llm `/mcp` as an extension: it called `pdf.extract` on both files,
+  grepped `text_path` of the 300-page PDF for an item on page 287, and read the scanned memo.
+
+## Gaps
+
+- **The mesh console doesn't use it.** The console still extracts PDF text in the
+  browser (pdf.js) and only describes scanned PDFs with a vision model. Using this
+  tool there would be a UI change in mesh-llm.
+- **PDFs attached to inference requests are not intercepted.** A base64 PDF inside
+  `/v1/chat/completions` still goes to the model as-is; this plugin only works when
+  the client calls the tool.
+- **`path` reads any PDF the mesh-llm user can read**, for anyone who can reach the
+  console's `/mcp` or HTTP API. That API is meant for this machine; don't expose it.
+- **`file` paths only help callers on the same machine** (or with the same filesystem).
+- OCR quality is Tesseract's; tables and layout are flattened to text.
+- Heavy: Java + a ~300 MB jar + Tesseract on the node that runs it.
+- PDF only (Tika can do Office formats too; not wired up). No CI yet.
 
 ## Build
-
-Until the host hook lands, `Cargo.toml` pins `mesh-llm-plugin` to the PR
-branch commit, and the plugin only works with a mesh-llm built from that PR.
 
 ```sh
 cargo test && cargo clippy --all-targets -- -D warnings
 ```
-
-## Gaps
-
-- **Host hook not merged.** Needs mesh-llm#3011; stock mesh-llm ignores this plugin.
-- **`mesh-docs` (RLM) is not validated with real models.** The search/read/ask
-  loop has only run in unit tests against a scripted model. Live runs used the
-  one-prompt fallback (best-matching pages in a single prompt).
-- **Pointer mode defaults to `auto`.** Any tool-using caller on loopback gets
-  local paths; loopback + tools does not prove the caller can read the files.
-  `header` (explicit opt-in) may be the better default — undecided.
-- **No OCR.** Scanned PDFs get `422 pdf_no_text_layer`.
-- **Size.** Host chat bodies cap at 8 MiB (≈6 MB PDF inline, ≈11 MB via blob upload).
-- **Model names.** A request using a public model name (`Qwen/…:q4_k_m`) is listed
-  to the plugin under its internal id, so `mesh-docs` may pick a different model.
-- **`/v1/responses` flat `file_data`** is rejected by the host translator; nested
-  `input_file` works.
-- **No client-disconnect signal** to plugins; an abandoned `mesh-docs` turn runs
-  up to its 240 s budget.
-- **Real agents don't send PDFs this way yet** (goose sends none; Claude Code's
-  Anthropic `document` blocks need #3011). Tested with curl/scripts.
-- **Heavy:** needs Java + the ~300 MB Tika jar on each node that receives PDFs.
-- PDF only; no CI in this repo yet.

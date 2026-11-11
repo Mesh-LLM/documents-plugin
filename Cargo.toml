@@ -1,18 +1,16 @@
 [package]
-name = "mesh-documents-plugin"
+name = "mesh-pdf-plugin"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-description = "PDF attachments for Mesh LLM: inline text, local files for agents, or the mesh-docs reading model"
+description = "PDF text extraction for Mesh LLM with Apache Tika (and OCR)"
 
 [dependencies]
 anyhow = "1"
-async-trait = "0.1"
-futures = "0.3"
+base64 = "0.22"
 hex = "0.4"
-libc = "0.2"
-# Pinned to the host-hook PR branch (Mesh-LLM/mesh-llm#3011) until it lands on main.
-mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "057c3d73ca17730fe0887a4e654c9f4eeef4e001" }
+# Stock mesh-llm main; no host changes needed.
+mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "fe87794b667dc7a449e77eaca024e520c06993b0" }
 rand = "0.10"
 reqwest = { version = "0.13", default-features = false }
 schemars = "1"

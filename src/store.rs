@@ -3,18 +3,15 @@
 //! `<root>/<id>/` holds `original.pdf`, `text.md` (page markers),
 //! `pages.json` and `meta.json`. Directories are 0700 and files 0600. A
 //! re-sent PDF is found by its hash and not extracted again. Entries unused
-//! for the TTL are removed, oldest first when over the size cap, except those
-//! pinned by a running `mesh-docs` turn.
+//! for the TTL are removed, oldest first when over the size cap.
 
 use crate::error::DocError;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
 use std::fs::{DirBuilder, OpenOptions};
 use std::io::Write;
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -47,7 +44,6 @@ pub struct Store {
     root: PathBuf,
     ttl: Duration,
     max_bytes: u64,
-    pins: Mutex<HashMap<String, usize>>,
 }
 
 /// The first 96 bits of the PDF's SHA-256: unique within one store, and
@@ -87,12 +83,7 @@ impl Store {
             root,
             ttl,
             max_bytes,
-            pins: Mutex::new(HashMap::new()),
         })
-    }
-
-    pub fn ttl(&self) -> Duration {
-        self.ttl
     }
 
     fn valid_id(id: &str) -> bool {
@@ -172,24 +163,6 @@ impl Store {
         serde_json::from_slice(&std::fs::read(self.root.join(id).join("pages.json")).ok()?).ok()
     }
 
-    pub fn pin(&self, ids: &[String]) -> Pin<'_> {
-        let mut pins = self.pins.lock().unwrap_or_else(|e| e.into_inner());
-        for id in ids {
-            *pins.entry(id.clone()).or_default() += 1;
-        }
-        Pin {
-            store: self,
-            ids: ids.to_vec(),
-        }
-    }
-
-    fn is_pinned(&self, id: &str) -> bool {
-        self.pins
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains_key(id)
-    }
-
     /// Remove expired entries, then the least recently used ones over the cap.
     pub fn sweep(&self) -> usize {
         let Ok(dirs) = std::fs::read_dir(&self.root) else {
@@ -211,7 +184,7 @@ impl Store {
                 }
                 continue;
             }
-            if !Self::valid_id(&name) || self.is_pinned(&name) {
+            if !Self::valid_id(&name) {
                 continue;
             }
             let meta: Option<Meta> = std::fs::read(dir.path().join("meta.json"))
@@ -241,14 +214,6 @@ impl Store {
     }
 }
 
-#[cfg(test)]
-impl Store {
-    pub fn sweep_all_for_test(&self) {
-        let _ = std::fs::remove_dir_all(&self.root);
-        let _ = private_dir(&self.root);
-    }
-}
-
 fn dir_size(path: &Path) -> u64 {
     std::fs::read_dir(path)
         .map(|entries| {
@@ -259,26 +224,6 @@ fn dir_size(path: &Path) -> u64 {
                 .sum()
         })
         .unwrap_or(0)
-}
-
-/// Keeps documents from the TTL sweep while a turn reads them.
-pub struct Pin<'a> {
-    store: &'a Store,
-    ids: Vec<String>,
-}
-
-impl Drop for Pin<'_> {
-    fn drop(&mut self) {
-        let mut pins = self.store.pins.lock().unwrap_or_else(|e| e.into_inner());
-        for id in &self.ids {
-            if let Some(count) = pins.get_mut(id) {
-                *count -= 1;
-                if *count == 0 {
-                    pins.remove(id);
-                }
-            }
-        }
-    }
 }
 
 #[cfg(test)]
@@ -311,18 +256,11 @@ mod tests {
     }
 
     #[test]
-    fn the_sweep_removes_expired_entries_but_not_pinned_ones() {
+    fn the_sweep_removes_expired_entries() {
         let dir = TempDir::new();
         let store = Store::open(dir.path().join("docs"), Duration::ZERO, u64::MAX).unwrap();
         let a = document_id(b"a");
-        let b = document_id(b"b");
         store.save(&a, b"a", "a.pdf", &pages()).unwrap();
-        store.save(&b, b"b", "b.pdf", &pages()).unwrap();
-        let pin = store.pin(std::slice::from_ref(&a));
-        assert_eq!(store.sweep(), 1);
-        assert!(store.lookup(&a).is_some());
-        assert!(store.lookup(&b).is_none());
-        drop(pin);
         assert_eq!(store.sweep(), 1);
         assert!(store.lookup(&a).is_none());
     }

@@ -1,9 +1,4 @@
-//! Text shaping: Tika XHTML to pages, and the parts the model sees.
-//!
-//! Extracted text stays user-role data. The delimiters below help the model
-//! tell documents apart; they are not an injection boundary.
-
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+//! Text shaping: Tika XHTML to pages, page markers and previews.
 
 pub const PAGE_MARKER: &str = "--- Page ";
 const PREVIEW_CHARS: usize = 1_500;
@@ -129,70 +124,12 @@ pub fn text_with_page_markers(pages: &[String]) -> String {
     out
 }
 
-pub fn escape_attr(value: &str) -> String {
-    value
-        .replace('&', "&amp;")
-        .replace('"', "&quot;")
-        .replace('<', "&lt;")
-        .replace('>', "&gt;")
-}
-
-/// Keep a document's own text from closing our delimiter.
-fn escape_body(text: &str) -> String {
-    text.replace("</document", "<\\/document")
-}
-
-pub fn display_name(filename: Option<&str>, index: usize) -> String {
+pub fn display_name(filename: Option<&str>) -> String {
     filename
         .map(str::trim)
         .filter(|name| !name.is_empty())
         .map(|name| name.chars().take(200).collect())
-        .unwrap_or_else(|| format!("document-{}.pdf", index + 1))
-}
-
-pub fn inline_part(filename: &str, pages: &[String]) -> String {
-    format!(
-        "<document filename=\"{}\" pages=\"{}\">\n{}\n</document>",
-        escape_attr(filename),
-        pages.len(),
-        escape_body(&text_with_page_markers(pages))
-    )
-}
-
-pub struct PointerFacts<'a> {
-    pub filename: &'a str,
-    pub pages: usize,
-    pub chars: usize,
-    pub preview: &'a str,
-    pub text_path: &'a std::path::Path,
-    pub pdf_path: &'a std::path::Path,
-    pub expires: SystemTime,
-}
-
-pub fn pointer_part(facts: &PointerFacts<'_>) -> String {
-    format!(
-        "<document filename=\"{name}\" pages=\"{pages}\" chars=\"{chars}\" mode=\"pointer\">\n\
-         This PDF is too large to include here. Its extracted text and the original are \
-         files on this machine; read them with your tools.\n\
-         - Extracted text: {text} (each page starts with a \"{PAGE_MARKER}N ---\" line)\n\
-         - Original PDF: {pdf}\n\
-         These files are kept until at least {expires} (24 hours after their last use).\n\n\
-         Beginning of the text:\n{preview}\n</document>",
-        name = escape_attr(facts.filename),
-        pages = facts.pages,
-        chars = facts.chars,
-        text = facts.text_path.display(),
-        pdf = facts.pdf_path.display(),
-        expires = utc_timestamp(facts.expires),
-        preview = escape_body(facts.preview),
-    )
-}
-
-pub fn rlm_part(token: &str, index: usize, filename: &str, pages: usize) -> String {
-    format!(
-        "<mesh-document token=\"{token}\" index=\"{index}\" filename=\"{}\" pages=\"{pages}\"/>",
-        escape_attr(filename)
-    )
+        .unwrap_or_else(|| "document.pdf".into())
 }
 
 pub fn preview(pages: &[String]) -> String {
@@ -201,30 +138,6 @@ pub fn preview(pages: &[String]) -> String {
         Some((cut, _)) => format!("{}…", &text[..cut]),
         None => text,
     }
-}
-
-/// `YYYY-MM-DD HH:MM UTC` without a date crate.
-pub fn utc_timestamp(time: SystemTime) -> String {
-    let secs = time
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or(Duration::ZERO)
-        .as_secs();
-    let (days, rem) = (secs / 86_400, secs % 86_400);
-    // Howard Hinnant's civil_from_days.
-    let z = days as i64 + 719_468;
-    let era = z.div_euclid(146_097);
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let day = doy - (153 * mp + 2) / 5 + 1;
-    let month = if mp < 10 { mp + 3 } else { mp - 9 };
-    let year = yoe + era * 400 + i64::from(month <= 2);
-    format!(
-        "{year:04}-{month:02}-{day:02} {:02}:{:02} UTC",
-        rem / 3600,
-        (rem % 3600) / 60
-    )
 }
 
 #[cfg(test)]
@@ -245,19 +158,5 @@ mod tests {
     #[test]
     fn text_without_pages_is_one_page() {
         assert_eq!(pages_from_xhtml("<body><p>only</p></body>"), vec!["only"]);
-    }
-
-    #[test]
-    fn parts_escape_names_and_closing_tags() {
-        let part = inline_part("a\"b<.pdf", &["x </document> y".to_string()]);
-        assert!(part.starts_with("<document filename=\"a&quot;b&lt;.pdf\" pages=\"1\">"));
-        assert!(part.contains("x <\\/document> y"));
-        assert!(part.contains("--- Page 1 ---"));
-    }
-
-    #[test]
-    fn timestamps_are_utc_dates() {
-        let time = UNIX_EPOCH + Duration::from_secs(1_794_362_773);
-        assert_eq!(utc_timestamp(time), "2026-11-11 02:06 UTC");
     }
 }

@@ -4,8 +4,8 @@
 //! Every extraction runs under the caller's deadline. When it passes, the
 //! HTTP request is dropped (closing the connection), Tika is told the same
 //! deadline through `X-Tika-Timeout-Millis`, and the caller gets a 504. The
-//! PDF bytes were read from the staged file before Tika is called, so the
-//! host deleting its staged file never races an extraction.
+//! With `ocr` on, Tika OCRs pages that have no text layer with Tesseract
+//! (`X-Tika-PDFOcrStrategy: auto`).
 
 use crate::error::DocError;
 use crate::settings::Settings;
@@ -23,11 +23,16 @@ pub struct Tika {
     client: reqwest::Client,
     server: Mutex<Option<Server>>,
     permits: Semaphore,
+    ocr: Option<String>,
 }
 
 enum Source {
     Url(String),
-    Jar { java: String, jar: PathBuf },
+    Jar {
+        java: String,
+        jar: PathBuf,
+        tesseract_dir: Option<PathBuf>,
+    },
     Missing,
 }
 
@@ -43,6 +48,7 @@ impl Tika {
             (_, Some(jar)) if !jar.as_os_str().is_empty() => Source::Jar {
                 java: settings.java.clone(),
                 jar: jar.clone(),
+                tesseract_dir: settings.tesseract_dir.clone(),
             },
             _ => Source::Missing,
         };
@@ -55,6 +61,7 @@ impl Tika {
             client,
             server: Mutex::new(None),
             permits: Semaphore::new(settings.tika_concurrency),
+            ocr: settings.ocr.then(|| settings.ocr_language.clone()),
         })
     }
 
@@ -73,12 +80,21 @@ impl Tika {
         let _permit = self.permits.acquire().await.map_err(DocError::internal)?;
         let url = self.server_url().await?;
         let remaining = deadline.saturating_duration_since(Instant::now());
-        let response = self
+        let mut request = self
             .client
             .put(format!("{url}/tika"))
             .header("Accept", "text/html")
             .header("Content-Type", "application/pdf")
-            .header("X-Tika-Timeout-Millis", remaining.as_millis().to_string())
+            .header("X-Tika-Timeout-Millis", remaining.as_millis().to_string());
+        request = match &self.ocr {
+            Some(language) => request
+                .header("X-Tika-PDFOcrStrategy", "auto")
+                .header("X-Tika-OCRLanguage", language),
+            None => request
+                .header("X-Tika-PDFOcrStrategy", "no_ocr")
+                .header("X-Tika-OCRskipOcr", "true"),
+        };
+        let response = request
             .body(pdf)
             .send()
             .await
@@ -117,7 +133,11 @@ impl Tika {
                 url: url.clone(),
                 child: None,
             },
-            Source::Jar { java, jar } => self.start(java, jar).await?,
+            Source::Jar {
+                java,
+                jar,
+                tesseract_dir,
+            } => self.start(java, jar, tesseract_dir.as_deref()).await?,
             Source::Missing => {
                 return Err(unavailable(
                     "no PDF extractor configured: set tika_url or tika_jar",
@@ -129,27 +149,39 @@ impl Tika {
         Ok(url)
     }
 
-    async fn start(&self, java: &str, jar: &PathBuf) -> Result<Server, DocError> {
+    async fn start(
+        &self,
+        java: &str,
+        jar: &PathBuf,
+        tesseract_dir: Option<&std::path::Path>,
+    ) -> Result<Server, DocError> {
         let port = std::net::TcpListener::bind("127.0.0.1:0")
             .and_then(|listener| listener.local_addr())
             .map_err(DocError::internal)?
             .port();
         let mut command = Command::new(java);
-        // Tika's watchdog forks its worker with `java` from PATH; make that the
-        // same Java the operator configured.
-        if let Some(bin) = std::path::Path::new(java)
+        // Tika's watchdog forks its worker with `java` from PATH, and finds
+        // `tesseract` on PATH: put the configured Java and Tesseract first, and
+        // the usual Homebrew/local bins last (a GUI-launched node has a bare PATH).
+        let java_bin = std::path::Path::new(java)
             .parent()
-            .filter(|dir| dir.is_absolute())
-        {
-            let path = std::env::var_os("PATH").unwrap_or_default();
-            let mut dirs = vec![bin.to_path_buf()];
-            dirs.extend(std::env::split_paths(&path));
-            if let Ok(joined) = std::env::join_paths(dirs) {
-                command.env("PATH", joined);
+            .filter(|dir| dir.is_absolute());
+        let mut dirs: Vec<PathBuf> = java_bin.into_iter().map(PathBuf::from).collect();
+        dirs.extend(tesseract_dir.map(PathBuf::from));
+        dirs.extend(std::env::split_paths(
+            &std::env::var_os("PATH").unwrap_or_default(),
+        ));
+        for extra in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
+            let extra = PathBuf::from(extra);
+            if extra.is_dir() && !dirs.contains(&extra) {
+                dirs.push(extra);
             }
-            if let Some(home) = bin.parent() {
-                command.env("JAVA_HOME", home);
-            }
+        }
+        if let Ok(joined) = std::env::join_paths(dirs) {
+            command.env("PATH", joined);
+        }
+        if let Some(home) = java_bin.and_then(|bin| bin.parent()) {
+            command.env("JAVA_HOME", home);
         }
         let mut child = command
             .arg("-jar")
