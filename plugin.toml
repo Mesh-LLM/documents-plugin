@@ -1,0 +1,4 @@
+name = "documents"
+version = "0.1.0"
+description = "PDF attachments: inline text, local files for agents, or the mesh-docs reading model."
+command = "documents"

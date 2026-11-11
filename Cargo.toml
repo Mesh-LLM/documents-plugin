@@ -1,0 +1,30 @@
+[package]
+name = "mesh-documents-plugin"
+version = "0.1.0"
+edition = "2024"
+license = "Apache-2.0"
+description = "PDF attachments for Mesh LLM: inline text, local files for agents, or the mesh-docs reading model"
+
+[dependencies]
+anyhow = "1"
+async-trait = "0.1"
+futures = "0.3"
+hex = "0.4"
+libc = "0.2"
+# Pinned to the mesh-llm worktree with the document-ingest host hook until it lands;
+# then: { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "<merged rev>" }
+mesh-llm-plugin = { path = "../mesh-documents/mesh/crates/mesh-llm-plugin" }
+rand = "0.10"
+reqwest = { version = "0.13", default-features = false }
+schemars = "1"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.11"
+tokio = { version = "1", features = ["full"] }
+url = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full", "test-util"] }
+
+[lints.rust]
+unsafe_code = "forbid"
