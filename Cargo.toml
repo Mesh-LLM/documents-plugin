@@ -11,9 +11,8 @@ async-trait = "0.1"
 futures = "0.3"
 hex = "0.4"
 libc = "0.2"
-# Pinned to the mesh-llm worktree with the document-ingest host hook until it lands;
-# then: { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "<merged rev>" }
-mesh-llm-plugin = { path = "../mesh-documents/mesh/crates/mesh-llm-plugin" }
+# Pinned to the host-hook PR branch (Mesh-LLM/mesh-llm#3011) until it lands on main.
+mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "057c3d73ca17730fe0887a4e654c9f4eeef4e001" }
 rand = "0.10"
 reqwest = { version = "0.13", default-features = false }
 schemars = "1"

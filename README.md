@@ -1,4 +1,8 @@
-# documents
+# pdf-plugin (documents)
+
+> **⚠️ DRAFT — experimental, not for production use.** It depends on an unmerged
+> host hook ([Mesh-LLM/mesh-llm#3011](https://github.com/Mesh-LLM/mesh-llm/pull/3011),
+> draft) and has only been tested on one dev machine. See [Gaps](#gaps).
 
 A mesh-llm plugin for PDF attachments. The host hands it every PDF part in a
 locally received request (`/v1/chat/completions`, `/v1/responses`, or an
@@ -61,9 +65,31 @@ extractions, cache hits and what the last `mesh-docs` turn did.
 
 ## Build
 
-Until the host hook lands, `Cargo.toml` points `mesh-llm-plugin` at a local
-mesh-llm checkout of that branch.
+Until the host hook lands, `Cargo.toml` pins `mesh-llm-plugin` to the PR
+branch commit, and the plugin only works with a mesh-llm built from that PR.
 
 ```sh
 cargo test && cargo clippy --all-targets -- -D warnings
 ```
+
+## Gaps
+
+- **Host hook not merged.** Needs mesh-llm#3011; stock mesh-llm ignores this plugin.
+- **`mesh-docs` (RLM) is not validated with real models.** The search/read/ask
+  loop has only run in unit tests against a scripted model. Live runs used the
+  one-prompt fallback (best-matching pages in a single prompt).
+- **Pointer mode defaults to `auto`.** Any tool-using caller on loopback gets
+  local paths; loopback + tools does not prove the caller can read the files.
+  `header` (explicit opt-in) may be the better default — undecided.
+- **No OCR.** Scanned PDFs get `422 pdf_no_text_layer`.
+- **Size.** Host chat bodies cap at 8 MiB (≈6 MB PDF inline, ≈11 MB via blob upload).
+- **Model names.** A request using a public model name (`Qwen/…:q4_k_m`) is listed
+  to the plugin under its internal id, so `mesh-docs` may pick a different model.
+- **`/v1/responses` flat `file_data`** is rejected by the host translator; nested
+  `input_file` works.
+- **No client-disconnect signal** to plugins; an abandoned `mesh-docs` turn runs
+  up to its 240 s budget.
+- **Real agents don't send PDFs this way yet** (goose sends none; Claude Code's
+  Anthropic `document` blocks need #3011). Tested with curl/scripts.
+- **Heavy:** needs Java + the ~300 MB Tika jar on each node that receives PDFs.
+- PDF only; no CI in this repo yet.

@@ -773,6 +773,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-config"
 version = "0.79.0"
+source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=057c3d73ca17730fe0887a4e654c9f4eeef4e001#057c3d73ca17730fe0887a4e654c9f4eeef4e001"
 dependencies = [
  "anyhow",
  "dirs",
@@ -792,6 +793,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-plugin"
 version = "0.79.0"
+source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=057c3d73ca17730fe0887a4e654c9f4eeef4e001#057c3d73ca17730fe0887a4e654c9f4eeef4e001"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -809,6 +811,7 @@ dependencies = [
 [[package]]
 name = "mesh-llm-types"
 version = "0.79.0"
+source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=057c3d73ca17730fe0887a4e654c9f4eeef4e001#057c3d73ca17730fe0887a4e654c9f4eeef4e001"
 dependencies = [
  "hex",
  "serde",
@@ -1366,6 +1369,7 @@ dependencies = [
 [[package]]
 name = "skippy-model-artifact"
 version = "0.79.0"
+source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=057c3d73ca17730fe0887a4e654c9f4eeef4e001#057c3d73ca17730fe0887a4e654c9f4eeef4e001"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1377,6 +1381,7 @@ dependencies = [
 [[package]]
 name = "skippy-model-ref"
 version = "0.79.0"
+source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=057c3d73ca17730fe0887a4e654c9f4eeef4e001#057c3d73ca17730fe0887a4e654c9f4eeef4e001"
 dependencies = [
  "serde",
 ]
@@ -1384,6 +1389,7 @@ dependencies = [
 [[package]]
 name = "skippy-native-runtime"
 version = "0.79.0"
+source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=057c3d73ca17730fe0887a4e654c9f4eeef4e001#057c3d73ca17730fe0887a4e654c9f4eeef4e001"
 dependencies = [
  "anyhow",
  "hex",
@@ -1395,6 +1401,7 @@ dependencies = [
 [[package]]
 name = "skippy-protocol"
 version = "0.79.0"
+source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=057c3d73ca17730fe0887a4e654c9f4eeef4e001#057c3d73ca17730fe0887a4e654c9f4eeef4e001"
 dependencies = [
  "prost",
  "prost-build",
@@ -1406,6 +1413,7 @@ dependencies = [
 [[package]]
 name = "skippy-tokenizer"
 version = "0.79.0"
+source = "git+https://github.com/Mesh-LLM/mesh-llm.git?rev=057c3d73ca17730fe0887a4e654c9f4eeef4e001#057c3d73ca17730fe0887a4e654c9f4eeef4e001"
 dependencies = [
  "serde",
 ]
