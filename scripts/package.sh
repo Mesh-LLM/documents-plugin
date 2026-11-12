@@ -17,9 +17,9 @@ fi
 
 exe=""
 case "$target" in
-  *-windows-*) exe=".exe"; lib_glob="libtika_native.dll"; ext=zip ;;
-  *-apple-darwin) lib_glob="libtika_native.dylib"; ext=tar.gz ;;
-  *) lib_glob="libtika_native.so"; ext=tar.gz ;;
+  *-windows-*) exe=".exe"; lib_ext=dll; ext=zip ;;
+  *-apple-darwin) lib_ext=dylib; ext=tar.gz ;;
+  *) lib_ext=so; ext=tar.gz ;;
 esac
 
 stage=$(mktemp -d)
@@ -29,9 +29,10 @@ mkdir -p "$pkg" dist
 cp README.md "$pkg/"
 # The host expects the executable to carry the plugin name.
 cp "$target_dir/release/mesh-documents-plugin$exe" "$pkg/documents$exe"
-# Tika, compiled to a native library (no JVM), ships next to the executable.
-lib=$(ls -t "$target_dir"/release/build/extractous-*/out/libs/$lib_glob | head -1)
-cp "$lib" "$pkg/"
+# Tika, compiled to a native library (no JVM), ships next to the executable,
+# with the JDK libraries it loads at run time from its own folder (libawt on Linux).
+lib=$(ls -t "$target_dir"/release/build/extractous-*/out/libs/libtika_native.$lib_ext | head -1)
+cp "$(dirname "$lib")"/*.$lib_ext "$pkg/"
 case "$target" in
   *-apple-darwin)
     # The build links the library by its absolute build path: load it from beside the executable.

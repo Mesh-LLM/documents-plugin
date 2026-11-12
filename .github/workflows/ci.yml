@@ -44,6 +44,11 @@ jobs:
         if: runner.os == 'Windows'
         uses: ilammy/msvc-dev-cmd@v1
 
+      # Git Bash's coreutils `link` shadows MSVC's link.exe on PATH.
+      - name: Remove Git's link.exe
+        if: runner.os == 'Windows'
+        run: rm -f /usr/bin/link.exe
+
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
