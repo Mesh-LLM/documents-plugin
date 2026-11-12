@@ -1,9 +1,9 @@
 [package]
-name = "mesh-pdf-plugin"
+name = "mesh-documents-plugin"
 version = "0.1.0"
 edition = "2024"
 license = "Apache-2.0"
-description = "PDF text extraction for Mesh LLM with Apache Tika (and OCR)"
+description = "Document (PDF) text extraction for Mesh LLM with Apache Tika (and OCR)"
 
 [dependencies]
 anyhow = "1"

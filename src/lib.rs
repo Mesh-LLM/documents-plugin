@@ -1,10 +1,10 @@
-//! `pdf`: PDF attachments for Mesh LLM, decoded with Apache Tika (and OCR).
+//! `documents`: document (PDF) attachments for Mesh LLM, decoded with Apache Tika (and OCR).
 //!
 //! - `transform`: a request transform (`request_transform.v1`) that replaces
 //!   PDF attachments in inference requests with their text, on the node the
 //!   client called, before routing. Clients keep their usual base URL.
-//! - `extract`: the same extraction as a tool, over MCP (`pdf.extract` on the
-//!   console's `/mcp`) and HTTP (`/api/plugins/pdf/tools/extract`).
+//! - `extract`: the same extraction as a tool, over MCP (`documents.extract` on the
+//!   console's `/mcp`) and HTTP (`/api/plugins/documents/tools/extract`).
 
 mod attachments;
 mod error;
@@ -101,14 +101,16 @@ fn current(shared: &Shared) -> Result<Arc<Pdf>, mesh_llm_plugin::PluginError> {
         .read()
         .unwrap_or_else(|e| e.into_inner())
         .clone()
-        .ok_or_else(|| mesh_llm_plugin::PluginError::internal("pdf plugin is not initialized"))
+        .ok_or_else(|| {
+            mesh_llm_plugin::PluginError::internal("documents plugin is not initialized")
+        })
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 struct NoArgs {}
 
 pub fn plugin() -> SimplePlugin {
-    let name = std::env::var("MESH_LLM_PLUGIN_NAME").unwrap_or_else(|_| "pdf".into());
+    let name = std::env::var("MESH_LLM_PLUGIN_NAME").unwrap_or_else(|_| "documents".into());
     let version = env!("CARGO_PKG_VERSION");
     let shared: Shared = Arc::default();
     SimplePlugin::new(PluginMetadata::new(
@@ -117,8 +119,8 @@ pub fn plugin() -> SimplePlugin {
         plugin_server_info(
             name.clone(),
             version,
-            "PDF",
-            "PDF text extraction with Apache Tika, including OCR",
+            "Documents",
+            "Document (PDF) text extraction with Apache Tika, including OCR",
             None::<String>,
         ),
     ))
@@ -168,7 +170,7 @@ fn manifest(name: &str) -> mesh_llm_plugin::proto::PluginManifest {
             .setting(setting(
                 "store_dir",
                 config_path(),
-                "Where extracted documents are kept (default ~/.mesh-llm/pdf)."
+                "Where extracted documents are kept (default ~/.mesh-llm/documents)."
             ))
             .setting(
                 setting("ttl_hours", config_integer(), "Remove extractions unused for this long.")

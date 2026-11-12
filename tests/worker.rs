@@ -4,7 +4,7 @@ use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
 fn run_worker(input: &[u8]) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mesh-pdf-plugin"))
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mesh-documents-plugin"))
         .args(["--extract-worker", "--deadline-secs", "60"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())

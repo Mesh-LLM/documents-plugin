@@ -47,7 +47,7 @@ impl Settings {
         let settings: Self = if settings_json.trim().is_empty() {
             Self::default()
         } else {
-            serde_json::from_str(settings_json).context("invalid pdf plugin settings")?
+            serde_json::from_str(settings_json).context("invalid documents plugin settings")?
         };
         if settings.tika_concurrency == 0 {
             bail!("tika_concurrency must be at least 1");
@@ -79,7 +79,7 @@ impl Settings {
         }
         let home =
             home_dir().context("no home directory (HOME or USERPROFILE); configure store_dir")?;
-        Ok(home.join(".mesh-llm").join("pdf"))
+        Ok(home.join(".mesh-llm").join("documents"))
     }
 
     pub fn ttl(&self) -> Duration {

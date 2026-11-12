@@ -59,7 +59,7 @@ jobs:
         run: cargo test --release --locked
 
       - name: Package
-        run: echo "archive=$(PDF_SKIP_BUILD=1 scripts/package.sh | tail -1)" >> "$GITHUB_ENV"
+        run: echo "archive=$(DOCUMENTS_SKIP_BUILD=1 scripts/package.sh | tail -1)" >> "$GITHUB_ENV"
 
       - name: Smoke-test the archive
         run: scripts/smoke.sh "$archive"

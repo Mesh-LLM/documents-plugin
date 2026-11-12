@@ -65,7 +65,7 @@ jobs:
       - name: Package
         run: |
           archive=$(scripts/package.sh "$VERSION" | tail -1)
-          test "$(basename "$archive")" = "pdf-${VERSION#v}-${{ matrix.target }}.$([[ $archive == *.zip ]] && echo zip || echo tar.gz)"
+          test "$(basename "$archive")" = "documents-${VERSION#v}-${{ matrix.target }}.$([[ $archive == *.zip ]] && echo zip || echo tar.gz)"
           echo "archive=$archive" >> "$GITHUB_ENV"
 
       - name: Smoke-test the archive
@@ -74,8 +74,8 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
-          name: pdf-${{ matrix.target }}
-          path: dist/pdf-*
+          name: documents-${{ matrix.target }}
+          path: dist/documents-*
           if-no-files-found: error
 
   publish:

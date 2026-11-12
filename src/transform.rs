@@ -101,5 +101,5 @@ fn describe(
 
 /// The transform's error as the client will read it.
 pub fn plugin_error(error: DocError) -> mesh_llm_plugin::PluginError {
-    mesh_llm_plugin::PluginError::invalid_params(format!("pdf: {}", error.message))
+    mesh_llm_plugin::PluginError::invalid_params(format!("documents: {}", error.message))
 }
