@@ -229,6 +229,7 @@ mod tests {
     use super::*;
 
     /// A worker that never answers: the deadline must end the call, and kill it.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_hung_worker_is_killed_at_the_deadline() {
         let tika = Tika::with_program("/bin/sh", &["-c", "sleep 30", "sh"]);
@@ -244,6 +245,7 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_failing_worker_is_unavailable() {
         let tika = Tika::with_program("/bin/sh", &["-c", "echo boom >&2; exit 1", "sh"]);
