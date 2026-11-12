@@ -1,9 +1,5 @@
 # documents-plugin
 
-> **⚠️ DRAFT: experimental, not for production use.** It needs the draft
-> mesh-llm hook [`request_transform.v1` (#3012)](https://github.com/Mesh-LLM/mesh-llm/pull/3012),
-> which is not on `main` yet. It has been tested on one Mac. See [Gaps](#gaps).
-
 This [mesh-llm](https://github.com/Mesh-LLM/mesh-llm) plugin reads documents (PDFs today) that
 arrive **inside inference requests** and turns them into text the model can
 use. It uses [Apache Tika](https://tika.apache.org/), with OCR (Tesseract) for
@@ -44,7 +40,8 @@ Releases carry an archive per platform: Linux x86_64 and arm64 (glibc 2.35+,
 built on Ubuntu 22.04), macOS arm64 and x86_64, and Windows x64. There is no
 Windows on ARM build, because GraalVM has no native-image for it. Each archive
 holds the `documents` executable and `libtika_native` (Tika, about 130 MB, 50 MB
-compressed) next to it. No Java. You need a mesh-llm built from #3012, and
+compressed) next to it. No Java. You need a mesh-llm with the
+[`request_transform.v1` hook (#3012)](https://github.com/Mesh-LLM/mesh-llm/pull/3012), and
 Tesseract for OCR (`brew install tesseract`, `apt install tesseract-ocr`, or
 the Windows installer at its default `C:\Program Files\Tesseract-OCR`).
 
@@ -99,7 +96,6 @@ same extracted text:
 
 ## Gaps
 
-- **Needs the unmerged hook** ([#3012](https://github.com/Mesh-LLM/mesh-llm/pull/3012)).
 - **Large PDFs without tools are rejected.** A local RLM trial (Qwen2.5-14B
   on mesh, Monty REPL) was unreliable on a real 47-page report and doesn't
   fit this hook: it produces an answer, not a rewrite, and needs its own model
