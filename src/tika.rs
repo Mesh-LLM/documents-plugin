@@ -43,8 +43,11 @@ impl Tika {
             args.push("--ocr".into());
             args.push(settings.ocr_language.clone().into());
         }
+        let program = std::env::current_exe()?;
+        #[cfg(windows)]
+        warm_font_cache(program.clone());
         Ok(Self {
-            program: std::env::current_exe()?,
+            program,
             args,
             path: worker_path(settings.tesseract_dir.as_deref()),
             permits: Semaphore::new(settings.tika_concurrency),
@@ -140,6 +143,28 @@ impl Tika {
             permits: Semaphore::new(1),
         }
     }
+}
+
+/// On Windows, PDFBox's first text extraction scans every system font (about
+/// 70 s on a GitHub runner) and caches the result in `~/.pdfbox.cache`; later
+/// ones take a second. Pay that once at startup, in the background, rather
+/// than on the first request.
+#[cfg(windows)]
+fn warm_font_cache(program: PathBuf) {
+    std::thread::spawn(move || {
+        let child = std::process::Command::new(program)
+            .args([WORKER_FLAG, "--deadline-secs", "600"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        if let Ok(mut child) = child {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(include_bytes!("../tests/fixtures/smoke.pdf"));
+            }
+            let _ = child.wait();
+        }
+    });
 }
 
 /// PATH for the worker: `tesseract_dir` first, then the plugin's PATH, then

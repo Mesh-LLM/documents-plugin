@@ -25,7 +25,7 @@ env -u LD_LIBRARY_PATH -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH \
   "$exe" --packaged-manifest > "$work/manifest.json"
 grep -q '"documents"' "$work/manifest.json"
 env -u LD_LIBRARY_PATH -u DYLD_LIBRARY_PATH -u DYLD_FALLBACK_LIBRARY_PATH \
-  "$exe" --extract-worker --deadline-secs 120 < "$root/tests/fixtures/smoke.pdf" > "$work/out.xhtml"
+  "$exe" --extract-worker --deadline-secs 300 < "$root/tests/fixtures/smoke.pdf" > "$work/out.xhtml"
 grep -q "Hello from the pdf-plugin smoke test" "$work/out.xhtml" \
   || { echo "extraction failed:" >&2; head -c 2000 "$work/out.xhtml" >&2; exit 1; }
 echo "smoke ok: $(basename "$archive")"
