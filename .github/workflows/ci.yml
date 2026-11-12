@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  rust:
+    name: Rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # No Windows on ARM: GraalVM has no native-image for it.
+        os:
+          - ubuntu-22.04
+          - ubuntu-22.04-arm
+          - macos-15
+          - macos-15-intel
+          - windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy, rustfmt
+
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y patchelf zlib1g-dev
+
+      - name: MSVC environment (native-image)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
+      # Git Bash's coreutils `link` shadows MSVC's link.exe on PATH.
+      - name: Remove Git's link.exe
+        if: runner.os == 'Windows'
+        run: rm -f /usr/bin/link.exe
+
+      - name: Cache Rust
+        uses: Swatinem/rust-cache@v2
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      # Everything in release: the build script compiles Tika with GraalVM
+      # native-image once per profile, and that is the slow part.
+      - name: Clippy
+        run: cargo clippy --release --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --release --locked
+
+      - name: Package
+        run: echo "archive=$(DOCUMENTS_SKIP_BUILD=1 scripts/package.sh | tail -1)" >> "$GITHUB_ENV"
+
+      - name: Smoke-test the archive
+        run: scripts/smoke.sh "$archive"

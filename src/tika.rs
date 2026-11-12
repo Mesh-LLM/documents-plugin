@@ -43,8 +43,11 @@ impl Tika {
             args.push("--ocr".into());
             args.push(settings.ocr_language.clone().into());
         }
+        let program = std::env::current_exe()?;
+        #[cfg(windows)]
+        warm_font_cache(program.clone());
         Ok(Self {
-            program: std::env::current_exe()?,
+            program,
             args,
             path: worker_path(settings.tesseract_dir.as_deref()),
             permits: Semaphore::new(settings.tika_concurrency),
@@ -142,14 +145,41 @@ impl Tika {
     }
 }
 
+/// On Windows, PDFBox's first text extraction scans every system font (about
+/// 70 s on a GitHub runner) and caches the result in `~/.pdfbox.cache`; later
+/// ones take a second. Pay that once at startup, in the background, rather
+/// than on the first request.
+#[cfg(windows)]
+fn warm_font_cache(program: PathBuf) {
+    std::thread::spawn(move || {
+        let child = std::process::Command::new(program)
+            .args([WORKER_FLAG, "--deadline-secs", "600"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn();
+        if let Ok(mut child) = child {
+            if let Some(mut stdin) = child.stdin.take() {
+                let _ = stdin.write_all(include_bytes!("../tests/fixtures/smoke.pdf"));
+            }
+            let _ = child.wait();
+        }
+    });
+}
+
 /// PATH for the worker: `tesseract_dir` first, then the plugin's PATH, then
-/// the usual Homebrew/local bins (a GUI-launched node has a bare PATH).
+/// the usual Homebrew/local bins, or Tesseract's default Windows install
+/// folder (a GUI-launched node has a bare PATH).
 fn worker_path(tesseract_dir: Option<&std::path::Path>) -> Option<OsString> {
     let mut dirs: Vec<PathBuf> = tesseract_dir.map(PathBuf::from).into_iter().collect();
     dirs.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     ));
-    for extra in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
+    #[cfg(windows)]
+    let extras = [r"C:\Program Files\Tesseract-OCR"];
+    #[cfg(not(windows))]
+    let extras = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
+    for extra in extras {
         let extra = PathBuf::from(extra);
         if extra.is_dir() && !dirs.contains(&extra) {
             dirs.push(extra);
@@ -224,6 +254,7 @@ mod tests {
     use super::*;
 
     /// A worker that never answers: the deadline must end the call, and kill it.
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_hung_worker_is_killed_at_the_deadline() {
         let tika = Tika::with_program("/bin/sh", &["-c", "sleep 30", "sh"]);
@@ -239,6 +270,7 @@ mod tests {
         assert!(started.elapsed() < Duration::from_secs(2));
     }
 
+    #[cfg(unix)]
     #[tokio::test]
     async fn a_failing_worker_is_unavailable() {
         let tika = Tika::with_program("/bin/sh", &["-c", "echo boom >&2; exit 1", "sh"]);

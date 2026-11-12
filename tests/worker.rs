@@ -4,8 +4,9 @@ use std::io::Write;
 use std::process::{Command, Output, Stdio};
 
 fn run_worker(input: &[u8]) -> Output {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_mesh-pdf-plugin"))
-        .args(["--extract-worker", "--deadline-secs", "60"])
+    let mut child = Command::new(env!("CARGO_BIN_EXE_mesh-documents-plugin"))
+        // A cold Windows run spends about 70 s scanning system fonts first.
+        .args(["--extract-worker", "--deadline-secs", "300"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())

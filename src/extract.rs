@@ -249,9 +249,14 @@ mod tests {
     #[test]
     fn paths_must_be_absolute_files() {
         assert_eq!(read_path("rel.pdf", 1024).unwrap_err().code, "invalid_path");
-        assert_eq!(read_path("/", 1024).unwrap_err().code, "invalid_path");
+        let dir = std::env::temp_dir();
         assert_eq!(
-            read_path("/nonexistent/x.pdf", 1024).unwrap_err().code,
+            read_path(dir.to_str().unwrap(), 1024).unwrap_err().code,
+            "invalid_path"
+        );
+        let missing = dir.join("nonexistent-documents-plugin").join("x.pdf");
+        assert_eq!(
+            read_path(missing.to_str().unwrap(), 1024).unwrap_err().code,
             "file_not_found"
         );
     }

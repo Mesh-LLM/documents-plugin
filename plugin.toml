@@ -1,4 +1,4 @@
-name = "pdf"
+name = "documents"
 version = "0.1.0"
-description = "PDF attachments in inference requests to text, with Apache Tika and OCR (DRAFT; needs mesh-llm request_transform.v1)."
-command = "pdf"
+description = "Document attachments in inference requests to text, with Apache Tika and OCR (PDF today; needs mesh-llm request_transform.v1)."
+command = "documents"

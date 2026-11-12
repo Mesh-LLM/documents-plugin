@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::fs::{DirBuilder, OpenOptions};
 use std::io::Write;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -61,17 +62,22 @@ fn now_secs() -> u64 {
         .as_secs()
 }
 
+/// Owner-only on Unix. On Windows the default ACL under the user's profile
+/// already limits it to that user.
 fn private_dir(path: &Path) -> std::io::Result<()> {
-    DirBuilder::new().recursive(true).mode(0o700).create(path)
+    let mut builder = DirBuilder::new();
+    builder.recursive(true);
+    #[cfg(unix)]
+    builder.mode(0o700);
+    builder.create(path)
 }
 
 fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
-    let mut file = OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?;
+    let mut options = OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(path)?;
     file.write_all(bytes)?;
     file.sync_all()
 }
@@ -230,7 +236,6 @@ fn dir_size(path: &Path) -> u64 {
 mod tests {
     use super::*;
     use crate::test_support::TempDir;
-    use std::os::unix::fs::PermissionsExt;
 
     fn pages() -> Vec<String> {
         vec!["one".into(), "two".into()]
@@ -245,9 +250,13 @@ mod tests {
         let id = document_id(&pdf);
         assert!(store.lookup(&id).is_none());
         let entry = store.save(&id, &pdf, "a.pdf", &pages()).unwrap();
-        let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
-        assert_eq!(mode(&entry.dir), 0o700);
-        assert_eq!(mode(&entry.text_path()), 0o600);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+            assert_eq!(mode(&entry.dir), 0o700);
+            assert_eq!(mode(&entry.text_path()), 0o600);
+        }
         assert_eq!(std::fs::read(entry.pdf_path()).unwrap(), pdf);
         let text = std::fs::read_to_string(entry.text_path()).unwrap();
         assert!(text.contains("--- Page 2 ---\n\ntwo"));

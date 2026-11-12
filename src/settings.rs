@@ -47,7 +47,7 @@ impl Settings {
         let settings: Self = if settings_json.trim().is_empty() {
             Self::default()
         } else {
-            serde_json::from_str(settings_json).context("invalid pdf plugin settings")?
+            serde_json::from_str(settings_json).context("invalid documents plugin settings")?
         };
         if settings.tika_concurrency == 0 {
             bail!("tika_concurrency must be at least 1");
@@ -77,10 +77,9 @@ impl Settings {
             }
             return Ok(dir.clone());
         }
-        let home = std::env::var_os("HOME")
-            .filter(|home| !home.is_empty())
-            .context("HOME is not set; configure store_dir")?;
-        Ok(PathBuf::from(home).join(".mesh-llm").join("pdf"))
+        let home =
+            home_dir().context("no home directory (HOME or USERPROFILE); configure store_dir")?;
+        Ok(home.join(".mesh-llm").join("documents"))
     }
 
     pub fn ttl(&self) -> Duration {
@@ -98,6 +97,15 @@ impl Settings {
     pub fn max_store_bytes(&self) -> u64 {
         self.max_store_mb.saturating_mul(1024 * 1024)
     }
+}
+
+/// `HOME`, or on Windows `USERPROFILE` when `HOME` is unset. Empty counts as unset.
+fn home_dir() -> Option<PathBuf> {
+    let var = |name| std::env::var_os(name).filter(|value| !value.is_empty());
+    let home = var("HOME");
+    #[cfg(windows)]
+    let home = home.or_else(|| var("USERPROFILE"));
+    home.map(PathBuf::from)
 }
 
 #[cfg(test)]
