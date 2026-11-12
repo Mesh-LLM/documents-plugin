@@ -40,14 +40,24 @@ disk: arguments `path` or `data_base64`, and `output` = `auto` | `text` | `file`
 
 ## Install
 
-You need Tesseract for OCR (`brew install tesseract`) and a mesh-llm built from
-#3012. No Java. Building downloads GraalVM once (extractous's build script) and
-compiles Tika with native-image, which takes about 2 minutes. The archive
-carries `libtika_native.dylib` (131 MB, 49 MB compressed) next to the `pdf`
-executable.
+Releases carry an archive per platform: Linux x86_64 and arm64 (glibc 2.35+,
+built on Ubuntu 22.04), macOS arm64 and x86_64, and Windows x64. There is no
+Windows on ARM build, because GraalVM has no native-image for it. Each archive
+holds the `pdf` executable and `libtika_native` (Tika, about 130 MB, 50 MB
+compressed) next to it. No Java. You need a mesh-llm built from #3012, and
+Tesseract for OCR (`brew install tesseract`, `apt install tesseract-ocr`, or
+the Windows installer at its default `C:\Program Files\Tesseract-OCR`).
 
 ```sh
-scripts/package.sh     # prints dist/pdf-0.1.0-<target>.tar.gz
+mesh-llm plugins install Mesh-LLM/pdf-plugin
+```
+
+To build an archive yourself (the build downloads GraalVM once and compiles
+Tika with native-image, a few minutes; Linux needs `patchelf`):
+
+```sh
+scripts/package.sh     # prints dist/pdf-0.1.0-<target>.tar.gz (.zip on Windows)
+scripts/smoke.sh dist/pdf-0.1.0-<target>.tar.gz
 mesh-llm plugins install --archive dist/pdf-0.1.0-<target>.tar.gz --name pdf
 ```
 
@@ -98,8 +108,9 @@ same extracted text:
 - **Native Tika is 2.9.2,** the version extractous pins. The Tika 2.x line is
   end of life, and extractous hasn't had a release since Dec 2024. Moving to
   Tika 3 means building our own native-image of it.
-- **Packaging is macOS only:** `scripts/package.sh` re-points the library to
-  `@loader_path`. Linux would need the same with `$ORIGIN`. Untested.
+- **Only tested end to end on macOS.** CI builds every release archive and
+  checks it extracts text with native Tika outside the build tree, but OCR and
+  the live mesh tests have only been run on a Mac.
 - **Claude Code often sends PDFs as page images.** When its Read tool is
   given `pages` (at most 20 per call), Claude Code sends JPEG page images
   instead of a document. The 3B model asked for `pages` unprompted, including
@@ -117,5 +128,9 @@ same extracted text:
 ## Build
 
 ```sh
-cargo test && cargo clippy --all-targets -- -D warnings
+cargo test --release && cargo clippy --release --all-targets -- -D warnings
 ```
+
+Release: push a `v*` tag. The release workflow builds, tests and smoke-tests
+each platform's archive and publishes them to the GitHub release, named
+`pdf-<version>-<target>` plus the stable alias `pdf-<target>`.

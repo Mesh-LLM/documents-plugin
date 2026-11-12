@@ -14,45 +14,31 @@ on:
 permissions:
   contents: write
 
+env:
+  VERSION: ${{ github.event.inputs.version || github.ref_name }}
+
 jobs:
   build:
-    name: Build ${{ matrix.name }}
+    name: Build ${{ matrix.target }}
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - name: linux-x86_64
-            os: ubuntu-latest
-            binary: mesh-pdf-plugin
+          # Ubuntu 22.04 keeps the glibc requirement at 2.35.
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            archive_ext: tar.gz
-            package: tar
-          - name: linux-aarch64
-            os: ubuntu-24.04-arm
-            binary: mesh-pdf-plugin
+          - os: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
-            archive_ext: tar.gz
-            package: tar
-          - name: macos-aarch64
-            os: macos-15
-            binary: mesh-pdf-plugin
+          - os: macos-15
             target: aarch64-apple-darwin
-            archive_ext: tar.gz
-            package: tar
-          - name: windows-x86_64
-            os: windows-latest
-            binary: mesh-pdf-plugin.exe
+          - os: macos-15-intel
+            target: x86_64-apple-darwin
+          - os: windows-latest
             target: x86_64-pc-windows-msvc
-            archive_ext: zip
-            package: zip
-          - name: windows-aarch64
-            os: windows-11-arm
-            binary: mesh-pdf-plugin.exe
-            target: aarch64-pc-windows-msvc
-            archive_ext: zip
-            package: zip
-
+    defaults:
+      run:
+        shell: bash
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -62,52 +48,34 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Install Linux build tools
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y patchelf zlib1g-dev
+
+      - name: MSVC environment (native-image)
+        if: runner.os == 'Windows'
+        uses: ilammy/msvc-dev-cmd@v1
+
       - name: Cache Rust
         uses: Swatinem/rust-cache@v2
 
-      - name: Build release binary
-        run: cargo build --release --locked
-
-      - name: Test release binary
+      - name: Test
         run: cargo test --release --locked
 
-      - name: Package Unix archive
-        if: matrix.package == 'tar'
-        shell: bash
+      - name: Package
         run: |
-          set -euo pipefail
-          version="${{ github.event.inputs.version || github.ref_name }}"
-          version="${version#v}"
-          stable_archive="pdf-${{ matrix.target }}.${{ matrix.archive_ext }}"
-          versioned_archive="pdf-${version}-${{ matrix.target }}.${{ matrix.archive_ext }}"
-          mkdir -p dist/pdf
-          cp "target/release/${{ matrix.binary }}" dist/pdf/pdf
-          cp plugin.toml dist/pdf/plugin.toml
-          cp README.md dist/pdf/README.md
-          tar -czf "$stable_archive" -C dist pdf
-          cp "$stable_archive" "$versioned_archive"
+          archive=$(scripts/package.sh "$VERSION" | tail -1)
+          test "$(basename "$archive")" = "pdf-${VERSION#v}-${{ matrix.target }}.$([[ $archive == *.zip ]] && echo zip || echo tar.gz)"
+          echo "archive=$archive" >> "$GITHUB_ENV"
 
-      - name: Package Windows archive
-        if: matrix.package == 'zip'
-        shell: pwsh
-        run: |
-          $version = "${{ github.event.inputs.version || github.ref_name }}".TrimStart("v")
-          $stableArchive = "pdf-${{ matrix.target }}.${{ matrix.archive_ext }}"
-          $versionedArchive = "pdf-$version-${{ matrix.target }}.${{ matrix.archive_ext }}"
-          New-Item -ItemType Directory -Force -Path dist/pdf | Out-Null
-          Copy-Item "target/release/${{ matrix.binary }}" "dist/pdf/pdf.exe"
-          Copy-Item plugin.toml "dist/pdf/plugin.toml"
-          Copy-Item README.md "dist/pdf/README.md"
-          Compress-Archive -Path "dist/pdf" -DestinationPath $stableArchive
-          Copy-Item $stableArchive $versionedArchive
+      - name: Smoke-test the archive
+        run: scripts/smoke.sh "$archive"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
         with:
           name: pdf-${{ matrix.target }}
-          path: |
-            pdf-*.tar.gz
-            pdf-*.zip
+          path: dist/pdf-*
           if-no-files-found: error
 
   publish:
@@ -124,8 +92,8 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.event.inputs.version || github.ref_name }}
-          name: ${{ github.event.inputs.version || github.ref_name }}
+          tag_name: ${{ env.VERSION }}
+          name: ${{ env.VERSION }}
           files: artifacts/*
           fail_on_unmatched_files: true
           overwrite_files: true

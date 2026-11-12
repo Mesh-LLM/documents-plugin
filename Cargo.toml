@@ -11,8 +11,8 @@ base64 = "0.22"
 # Tika compiled to a native library with GraalVM (no JVM); its build downloads GraalVM.
 extractous = "0.3.0"
 hex = "0.4"
-# Needs request_transform.v1: draft https://github.com/Mesh-LLM/mesh-llm/pull/3012
-mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "0f30127b05ea1ebe87bd8a5dac69b2d019a7d913" }
+# Needs request_transform.v1 (#3012 head until it merges): https://github.com/Mesh-LLM/mesh-llm/pull/3012
+mesh-llm-plugin = { git = "https://github.com/Mesh-LLM/mesh-llm.git", rev = "355d29c8c1d3f35c056493b22bf2d1af44c028cb" }
 rand = "0.10"
 schemars = "1"
 serde = { version = "1", features = ["derive"] }

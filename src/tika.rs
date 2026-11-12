@@ -143,13 +143,18 @@ impl Tika {
 }
 
 /// PATH for the worker: `tesseract_dir` first, then the plugin's PATH, then
-/// the usual Homebrew/local bins (a GUI-launched node has a bare PATH).
+/// the usual Homebrew/local bins, or Tesseract's default Windows install
+/// folder (a GUI-launched node has a bare PATH).
 fn worker_path(tesseract_dir: Option<&std::path::Path>) -> Option<OsString> {
     let mut dirs: Vec<PathBuf> = tesseract_dir.map(PathBuf::from).into_iter().collect();
     dirs.extend(std::env::split_paths(
         &std::env::var_os("PATH").unwrap_or_default(),
     ));
-    for extra in ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"] {
+    #[cfg(windows)]
+    let extras = [r"C:\Program Files\Tesseract-OCR"];
+    #[cfg(not(windows))]
+    let extras = ["/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin"];
+    for extra in extras {
         let extra = PathBuf::from(extra);
         if extra.is_dir() && !dirs.contains(&extra) {
             dirs.push(extra);
